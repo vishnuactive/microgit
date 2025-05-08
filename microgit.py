@@ -27,6 +27,14 @@ commit_file.set_defaults(func=helpers.commit)
 log_files = sub_parser.add_parser("log",help="To get commit logs")
 log_files.set_defaults(func=helpers.log)
 
+checkout_command = sub_parser.add_parser("checkout",help="Checkout to a particular commit hash or to a tag name or to another branch")
+checkout_command.add_argument("commithash",help="Commit hash/branch/tagname")
+checkout_command.set_defaults(func=helpers.checkout)
+
+branch_command = sub_parser.add_parser("branch",help="Create or list branches")
+branch_command.add_argument("branchname",nargs="?",help="Name of branch")
+branch_command.set_defaults(func=helpers.branch)
+
 if __name__ == "__main__":
     try:
         arguments = parser.parse_args()
@@ -42,5 +50,9 @@ if __name__ == "__main__":
             arguments.func(arguments.message)
         elif arguments.git_command == "log":
             arguments.func()
+        elif arguments.git_command == "checkout":
+            arguments.func(arguments.commithash)
+        elif arguments.git_command == "branch":
+            arguments.func(arguments.branchname)
     except Exception as ex:
         print(f"{str(ex)}")

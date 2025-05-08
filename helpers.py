@@ -7,31 +7,29 @@ import configparser
 import hashlib
 import chardet
 import sys
+import shelve
 
 GIT_DIR = ".microgit"
 
 def repo_path(*path):
     return os.path.join(".microgit",*path)
 
-def write_to_configfile():
+def write_to_configfile(key=None,value=None,default=True):
     try:
-        config = configparser.ConfigParser()
-        config['init'] = {'defaultbranch': "master"}
-        config['user'] = {'name': "user","email":"a@a.com"}
-        with open(repo_path("config.ini"),"w") as file:
-            config.write(file)
+        config = shelve.open(repo_path("config"))
+        if default:
+            config['init.defaultbranch'] = "master"
+            config['user.name'] = "user"
+            config["user.email"] = "a@a.com"
+        else:
+            config[key] = value
     except Exception as ex:
         raise ex
     
 def read_from_config(key):
     try:
-        config = configparser.ConfigParser()
-        if os.path.exists(repo_path("config.ini")):
-            config.read(repo_path("config.ini"))
-            key,subkey = key.split(".")
-            return config[key][subkey]
-        else:
-            raise Exception("config file not found")
+        config = shelve.open(repo_path("config"))
+        return config[key]
     except Exception as ex:
         raise ex
 
@@ -45,7 +43,7 @@ def init():
             os.makedirs(repo_path("refs","heads"))
             write_to_configfile()
             with open(repo_path("HEAD"),"w") as file:
-                main_branch = read_from_config("init.defaultBranch")
+                main_branch = read_from_config("init.defaultbranch")
                 file.write(f"ref: refs/heads/{main_branch}")
             print("Initialized Git Repository in the current directory")
     except Exception as ex:
@@ -82,9 +80,7 @@ def cat_file(commit_hash):
     
 def add(filenames):
     try:
-        for filename in filenames:
-            if not os.path.exists(filename):
-                raise Exception(f"File not found : {filename}")
+        for filename in list(filter(lambda file:os.path.exists(file),file_list(filenames))):
             index_file_path = repo_path("index")
             if not os.path.exists(index_file_path):
                 with open(index_file_path,"w") as file:
@@ -94,11 +90,10 @@ def add(filenames):
                 index_content = json.load(file)
             commit_hashes = get_commit_hashes()
             if hash_object(filename) in commit_hashes:
-                sys.exit()
+                continue
             index_content[filename] = hash_object(filename)
             with open(index_file_path,"w") as file:
                 json.dump(index_content,file,indent=4)
-            print(f"Added {filename} to the staging area")
     except Exception as ex:
         raise ex
     
@@ -189,5 +184,71 @@ def get_commit_hashes():
                 commit_hashes.extend(list(content['tree'].values()))
                 head = content['parent'] if 'parent' in content else None
         return commit_hashes
+    except Exception as ex:
+        raise ex
+    
+def file_list(filelist=[]):
+    try:
+        if len(filelist) == 0:
+            file_list = [file for file in os.listdir() if not os.path.isdir(file)]
+        else:
+            file_list = filelist
+        file_to_ignore = []
+        if os.path.exists(repo_path(".microgitignore")):
+            ignorefilelist = []
+            with open(repo_path(".microgitignore"),"r") as file:
+                ignorefilelist = file.readlines()
+            for file in ignorefilelist:
+                file_to_ignore.extend(fnmatch.filter(file_list,file.strip()))
+        return list(set(file_list) - set(file_to_ignore))
+    except Exception as ex:
+        raise ex
+    
+def checkout(commithash_or_branchname):
+    try:
+        checkout_to_branch = False
+        if os.path.exists(repo_path("refs","heads",commithash_or_branchname)):
+            with open(repo_path("refs","heads",commithash_or_branchname),"r") as file:
+                commithash = file.read().strip()
+                checkout_to_branch = True
+            with open(repo_path("HEAD"),"w") as file:
+                file.write(f"ref: refs/heads/{commithash_or_branchname}")
+        else:
+            commithash = commithash_or_branchname   
+        if not os.path.exists(repo_path("objects",commithash[:2],commithash[2:])):
+            raise Exception(f"Commit hash or branch not found : {commithash_or_branchname}")
+        with open(repo_path("objects",commithash[:2],commithash[2:]),"rb") as file:
+            content = zlib.decompress(file.read())
+            content = content.decode(chardet.detect(content)['encoding'])
+            content = json.loads(content)
+        all_files = file_list()
+        for file in all_files:
+            if file not in list(content['tree'].keys()):
+                os.remove(file)
+        for filename,commit in content['tree'].items():
+            with open(filename,"w") as f_out:
+                f_out.write(cat_file(commit))
+        print(f"Switched to {'commit' if not checkout_to_branch else 'branch'} {commithash_or_branchname}")
+    except Exception as ex:
+        raise ex
+    
+def branch(branch_name):
+    try:
+        if branch_name is None:
+            if not os.path.exists(repo_path("refs","heads")):
+                raise Exception("branch path (refs/heads) not found")
+            with open(repo_path("HEAD"),"r") as file:
+                head_branch_name = file.read().strip().split()[1]
+                head_branch_name = head_branch_name.split("/")[2] if "/" in head_branch_name else None
+            for files in os.listdir(repo_path("refs","heads")):
+                    print(f"{'* ' if files == head_branch_name else ''}{files}")
+        else:
+            head = get_head()
+            if not os.path.exists(repo_path("refs","heads",branch_name)):
+                with open(repo_path("refs","heads",branch_name),"w") as file:
+                    file.write(head)
+                print(f"Created branch '{branch_name}'")
+            else:
+                print(f"Branch {branch_name} already exists")
     except Exception as ex:
         raise ex
