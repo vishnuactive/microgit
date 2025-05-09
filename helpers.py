@@ -8,6 +8,7 @@ import hashlib
 import chardet
 import sys
 import shelve
+from collections import deque
 
 GIT_DIR = ".microgit"
 
@@ -45,7 +46,7 @@ def init():
             with open(repo_path("HEAD"),"w") as file:
                 main_branch = read_from_config("init.defaultbranch")
                 file.write(f"ref: refs/heads/{main_branch}")
-            print("Initialized Git Repository in the current directory")
+            print(f"Initialized Git Repository in the current directory at {os.path.join(os.getcwd(),'.microgit')}")
     except Exception as ex:
         raise ex
     
@@ -97,7 +98,7 @@ def add(filenames):
     except Exception as ex:
         raise ex
     
-def commit(commit_message):
+def commit(commit_message,parent2=None):
     try:
         index_file_path = repo_path("index")
         parent = get_head()
@@ -106,12 +107,14 @@ def commit(commit_message):
         with open(index_file_path,"r") as file:
             index_file_content = json.load(file)
         if len(index_file_content) == 0:
-            raise Exception("Nothing to commit.")
+            raise Exception(f"\nOn branch {get_branch_name()}\nNothing to commit. Working tree clean")
         user_name= read_from_config("user.name")
         user_email = read_from_config("user.email")
         commit_content = {"tree":index_file_content,"username":user_name,"email":user_email,"date":datetime.now().isoformat(),"message":commit_message}
         if parent:
             commit_content['parent'] = parent
+        if parent2:
+            commit_content['merged_parent'] = parent2
         sha1 = hashlib.sha1(json.dumps(commit_content).encode()).hexdigest()
         if not os.path.exists(repo_path("objects",sha1[:2])):
             os.makedirs(repo_path("objects",sha1[:2]))
@@ -156,19 +159,37 @@ def update_head(commit):
     except Exception as ex:
         raise ex
     
-def log():
+def log(all_parents=False,one_line=False):
     try:
         parent_commit = get_head()
-        while parent_commit:
-            with open(repo_path("objects",parent_commit[:2],parent_commit[2:]),"rb") as file:
+        visited = set()
+        queue = deque([parent_commit])
+        while queue:
+            current_commit = queue.popleft()
+            if current_commit in visited:
+                continue
+            visited.add(current_commit)
+            with open(repo_path("objects",current_commit[:2],current_commit[2:]),"rb") as file:
                 content = zlib.decompress(file.read())
                 content = content.decode(chardet.detect(content)['encoding'])
                 content = json.loads(content)
-                print(f"\nCommit : {parent_commit}\nDate : {content['date']}\nUser : {content['username']}<{content['email']}>\n\n{content['message']}")
-                if 'parent' in content:
-                    parent_commit = content['parent']
+                if one_line:
+                    print(f"\n{current_commit} : {content['message']}")
                 else:
-                    parent_commit = None
+                    print(f"\nCommit : {current_commit}\nDate : {content['date']}\nUser : {content['username']}<{content['email']}>\n")
+                    if 'merged_parent' in content:
+                        print(f"\nMerged : {content['merged_parent']}")
+                    print(f"\n\n{content['message']}")
+
+                if all_parents:
+                    if 'parent' in content:
+                        queue.append(content['parent'])
+                    elif 'merged_parent' in content:
+                        queue.append(content['merged_parent'])
+                else:
+                    if 'parent' in content:
+                        queue.append(content['parent'])
+                
     except Exception as ex:
         raise ex
 
@@ -250,5 +271,101 @@ def branch(branch_name):
                 print(f"Created branch '{branch_name}'")
             else:
                 print(f"Branch {branch_name} already exists")
+    except Exception as ex:
+        raise ex
+def get_branch_name():
+    try:
+        content = None
+        branch_name = ''
+        if not os.path.exists(repo_path("HEAD")):
+            raise Exception("HEAD file not found")
+        with open(repo_path("HEAD"),"r") as file:
+            content = file.read().split()
+            branch_name = content[1].split("/")[2]
+        return branch_name
+    except Exception as ex:
+        raise ex
+def status():
+    try:
+        staged_files = {}
+        to_be_staged_files = []
+        unstaged_files = []
+        print(f"On branch {get_branch_name()}")
+        if not os.path.exists(repo_path("index")):
+            raise Exception("No index file")
+        with open(repo_path("index"),"r") as file:
+            staged_files = json.load(file)
+        if len(staged_files) > 0:
+            print("\nStaged changes\n---------------------------------------")
+            for files in staged_files:
+                print(files)
+            for file,commit_hash in staged_files.items():
+                if commit_hash != hash_object(file):
+                    to_be_staged_files.append(f"Modified : {file}")
+            if len(to_be_staged_files) > 0:
+                print("\nChanges to be staged\n---------------------------------------------")
+                for files in to_be_staged_files:
+                    print(files)
+
+        file_commits = get_commit_hashes()
+        files = file_list()
+        for file in files:
+            if hash_object(file) not in file_commits and file not in staged_files:
+                unstaged_files.append(file)
+        if len(unstaged_files) > 0:
+            print("\nUntracked files(use microgit.py add <filename> to add)\n----------------------------------")
+            for files in unstaged_files:
+                    print(files)
+    except Exception as ex:
+        raise ex
+
+def merge(branch_name):
+    try:
+        conflict_detected = False
+        if not os.path.exists(repo_path("refs","heads",branch_name)):
+            raise Exception(f"branch '{branch_name}' does not exist")
+        if not os.path.exists(repo_path("HEAD")):
+            raise Exception("No HEAD file")
+        head_branch_commit = get_head()
+        merge_branch_commit = None
+        with open(repo_path("refs","heads",branch_name),"r") as file:
+            merge_branch_commit = file.read().strip()
+        head_files = []
+        files_to_merge = []
+        merge_list = {}
+        if not os.path.exists(repo_path("objects",head_branch_commit[:2],head_branch_commit[2:])):
+            raise Exception("HEAD commit does not exist")
+        with open(repo_path("objects",head_branch_commit[:2],head_branch_commit[2:]),"rb") as file:
+            content = zlib.decompress(file.read())
+            content = content.decode(chardet.detect(content)['encoding'])
+            content = json.loads(content)
+            head_files = content['tree']
+        if not os.path.exists(repo_path("objects",merge_branch_commit[:2],merge_branch_commit[2:])):
+            raise Exception("merge branch commit does not exist")
+        with open(repo_path("objects",merge_branch_commit[:2],merge_branch_commit[2:]),"rb") as file:
+            content = zlib.decompress(file.read())
+            content = content.decode(chardet.detect(content)['encoding'])
+            content = json.loads(content)
+            files_to_merge = content['tree']
+        all_files = set(head_files.keys()) | set(files_to_merge.keys())
+        for filename in all_files:
+            head_hash = head_files.get(filename,None)
+            branch_hash = files_to_merge.get(filename,None)
+
+            if head_hash == branch_hash:
+                merge_list[filename] = head_hash
+            elif not head_hash and branch_hash:
+                merge_list[filename] = branch_hash
+            elif head_hash and not branch_hash:
+                merge_list[filename] = head_hash
+            else:
+                conflict_detected = True
+                content = "\n<<<<<<<<<<<<<<<<<<<<<<<<<<<<<HEAD\n"+cat_file(head_hash)+"\n===========================\n"+cat_file(branch_hash)+f"\n>>>>>>>>>>>>>>>>>>>>>>>>>>>{branch_name}\n"
+                with open(filename,"w") as file:
+                    file.write(content)
+                merge_list[filename] = hash_object(filename)
+            add(list(merge_list.keys()))
+            commit(f"Merged feature branch '{branch_name}'",parent2 = branch_hash)
+            print(f"Successfully Merged feature branch '{branch_name}' {'With conflicts.\nTry to resolve it manually' if conflict_detected else ''}")
     except Exception as ex:
         raise ex
