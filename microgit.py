@@ -44,6 +44,10 @@ merge_command = sub_parser.add_parser("merge",help="Merge a branch to another br
 merge_command.add_argument("branchname",help="branch name")
 merge_command.set_defaults(func=helpers.merge)
 
+reset_command = sub_parser.add_parser("reset",help="Remove file from the staging area")
+reset_command.add_argument("filename",nargs="+",help="Files to remove from staging")
+reset_command.set_defaults(func=helpers.reset)
+
 if __name__ == "__main__":
     try:
         arguments = parser.parse_args()
@@ -72,5 +76,8 @@ if __name__ == "__main__":
             arguments.func()
         elif arguments.git_command == "merge":
             arguments.func(arguments.branchname)
+        elif arguments.git_command == "reset":
+            arguments.func(arguments.filename)
     except Exception as ex:
         print(f"{str(ex)}")
+    
