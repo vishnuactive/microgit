@@ -49,6 +49,8 @@ def init():
             index_file_path = repo_path("index")
             with open(index_file_path,"w") as file:
                 json.dump({},file,indent=4)
+            with open(repo_path(".microgitignore"),"w") as file:
+                file.write("*.py")
             print(f"Initialized Git Repository in the current directory at {os.path.join(os.getcwd(),'.microgit')}")
     except Exception as ex:
         raise ex
